@@ -1,0 +1,27 @@
+# Build outputs
+target/
+*.class
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+
+# Local data
+.code4j/
+
+# Logs / runtime dumps
+*.log
+hs_err_pid*
+replay_pid*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
