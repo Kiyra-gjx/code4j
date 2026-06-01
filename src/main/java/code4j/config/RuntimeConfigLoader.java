@@ -114,10 +114,14 @@ public final class RuntimeConfigLoader {
     }
 
     private static void mergeMcpServers(Map<String, McpServerConfig> target, JsonNode servers) {
-        if (servers == null || !servers.isObject()) return;
+        if (servers == null || !servers.isObject()) {
+            return;
+        }
         servers.fields().forEachRemaining(entry -> {
             JsonNode node = entry.getValue();
-            if (node == null || !node.isObject()) return;
+            if (node == null || !node.isObject()) {
+                return;
+            }
             McpServerConfig existing = target.get(entry.getKey());
             target.put(entry.getKey(), mergeMcpServer(existing, node));
         });
@@ -125,18 +129,24 @@ public final class RuntimeConfigLoader {
 
     private static McpServerConfig mergeMcpServer(McpServerConfig existing, JsonNode node) {
         String command = settingsText(node, "command");
-        if (command.isBlank() && existing != null) command = existing.command();
+        if (command.isBlank() && existing != null) {
+            command = existing.command();
+        }
         List<String> args = node.has("args") && node.get("args").isArray()
                 ? stringList(node.get("args"))
                 : existing == null ? List.of() : existing.args();
         Map<String, String> env = new LinkedHashMap<>();
-        if (existing != null) env.putAll(existing.env());
+        if (existing != null) {
+            env.putAll(existing.env());
+        }
         JsonNode envNode = node.get("env");
         if (envNode != null && envNode.isObject()) {
             envNode.fields().forEachRemaining(e -> env.put(e.getKey(), e.getValue().asText("")));
         }
         String cwd = settingsText(node, "cwd");
-        if (cwd.isBlank() && existing != null) cwd = existing.cwd().orElse(null);
+        if (cwd.isBlank() && existing != null) {
+            cwd = existing.cwd().orElse(null);
+        }
         boolean enabled = node.has("enabled") ? node.get("enabled").asBoolean(true)
                 : existing == null || existing.enabled();
         Duration initializeTimeout = existing == null ? null : existing.initializeTimeout();
@@ -153,7 +163,9 @@ public final class RuntimeConfigLoader {
     // --- settings file parsing ---
 
     private static JsonNode readSettings(Path path) {
-        if (!Files.exists(path)) return MAPPER.createObjectNode();
+        if (!Files.exists(path)) {
+            return MAPPER.createObjectNode();
+        }
         try {
             return MAPPER.readTree(path.toFile());
         } catch (IOException exception) {
@@ -170,15 +182,25 @@ public final class RuntimeConfigLoader {
     private static String firstText(Map<String, String> env, JsonNode homeSettings, JsonNode cwdSettings,
                                     String envName, String settingsName, String fallback) {
         String envValue = env.get(envName);
-        if (envValue != null && !envValue.isBlank()) return envValue.trim();
+        if (envValue != null && !envValue.isBlank()) {
+            return envValue.trim();
+        }
         String cwdEnvValue = settingsEnvText(cwdSettings, envName);
-        if (!cwdEnvValue.isBlank()) return cwdEnvValue;
+        if (!cwdEnvValue.isBlank()) {
+            return cwdEnvValue;
+        }
         String homeEnvValue = settingsEnvText(homeSettings, envName);
-        if (!homeEnvValue.isBlank()) return homeEnvValue;
+        if (!homeEnvValue.isBlank()) {
+            return homeEnvValue;
+        }
         String cwdTopLevelValue = settingsText(cwdSettings, settingsName);
-        if (!cwdTopLevelValue.isBlank()) return cwdTopLevelValue;
+        if (!cwdTopLevelValue.isBlank()) {
+            return cwdTopLevelValue;
+        }
         String homeTopLevelValue = settingsText(homeSettings, settingsName);
-        if (!homeTopLevelValue.isBlank()) return homeTopLevelValue;
+        if (!homeTopLevelValue.isBlank()) {
+            return homeTopLevelValue;
+        }
         return fallback;
     }
 
@@ -186,30 +208,40 @@ public final class RuntimeConfigLoader {
     private static String firstEnvText(Map<String, String> env, JsonNode homeSettings, JsonNode cwdSettings,
                                        String envName) {
         String envValue = env.get(envName);
-        if (envValue != null && !envValue.isBlank()) return envValue.trim();
+        if (envValue != null && !envValue.isBlank()) {
+            return envValue.trim();
+        }
         String cwdEnvValue = settingsEnvText(cwdSettings, envName);
-        if (!cwdEnvValue.isBlank()) return cwdEnvValue;
+        if (!cwdEnvValue.isBlank()) {
+            return cwdEnvValue;
+        }
         return settingsEnvText(homeSettings, envName);
     }
 
     /** Top-level only chain: cwd → home. */
     private static String firstTopLevelText(JsonNode homeSettings, JsonNode cwdSettings, String settingsName) {
         String cwdTopLevelValue = settingsText(cwdSettings, settingsName);
-        if (!cwdTopLevelValue.isBlank()) return cwdTopLevelValue;
+        if (!cwdTopLevelValue.isBlank()) {
+            return cwdTopLevelValue;
+        }
         return settingsText(homeSettings, settingsName);
     }
 
     /** Returns the first non-blank value from a list of candidates. */
     private static String firstNonBlank(String... values) {
         for (String value : values) {
-            if (value != null && !value.isBlank()) return value.trim();
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
         }
         return "";
     }
 
     private static String settingsEnvText(JsonNode settings, String envName) {
         JsonNode env = settings == null ? null : settings.get("env");
-        if (env == null || !env.isObject()) return "";
+        if (env == null || !env.isObject()) {
+            return "";
+        }
         return text(env.get(envName));
     }
 
@@ -218,7 +250,9 @@ public final class RuntimeConfigLoader {
     }
 
     private static String text(JsonNode value) {
-        if (value == null || value.isNull()) return "";
+        if (value == null || value.isNull()) {
+            return "";
+        }
         String text = value.asText("");
         return text.isBlank() ? "" : text.trim();
     }
@@ -230,7 +264,9 @@ public final class RuntimeConfigLoader {
     }
 
     private static Optional<Integer> positiveInteger(String value) {
-        if (value == null || value.isBlank()) return Optional.empty();
+        if (value == null || value.isBlank()) {
+            return Optional.empty();
+        }
         try {
             int parsed = Integer.parseInt(value.trim());
             return parsed > 0 ? Optional.of(parsed) : Optional.empty();
