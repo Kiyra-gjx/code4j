@@ -9,6 +9,7 @@ target/
 
 # Local data
 .code4j/
+.claude/
 
 # Logs / runtime dumps
 *.log
