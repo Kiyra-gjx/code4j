@@ -7,7 +7,7 @@ import java.util.Optional;
  * Thrown when a model API request fails at the transport or HTTP level.
  * Not used for validation errors or cancellation.
  */
-public final class ModelRequestException extends RuntimeException {
+public class ModelRequestException extends RuntimeException {
     private final boolean retryable;
     private final Optional<Integer> statusCode;
     private final Optional<String> diagnostics;
@@ -20,8 +20,19 @@ public final class ModelRequestException extends RuntimeException {
         this.diagnostics = Objects.requireNonNull(diagnostics, "diagnostics");
     }
 
+    public ModelRequestException(String message, Optional<Integer> statusCode, boolean retryable, Throwable cause) {
+        super(Objects.requireNonNull(message, "message"), cause);
+        this.retryable = retryable;
+        this.statusCode = Objects.requireNonNull(statusCode, "statusCode");
+        this.diagnostics = diagnostics(statusCode, retryable);
+    }
+
     public ModelRequestException(String message) {
         this(message, false, Optional.empty(), Optional.empty());
+    }
+
+    private static Optional<String> diagnostics(Optional<Integer> statusCode, boolean retryable) {
+        return statusCode.map(s -> "statusCode=" + s + "; retryable=" + retryable);
     }
 
     public boolean retryable() { return retryable; }
