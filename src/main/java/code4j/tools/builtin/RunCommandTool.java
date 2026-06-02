@@ -46,10 +46,15 @@ public final class RunCommandTool implements Tool {
 
     @Override public ValidationResult validateInput(JsonNode input) {
         return ToolInputValidation.object(input).requiredString("command").optionalStringArray("args", true)
-                .optionalInteger("timeout", 1, timeoutPolicy.maxTimeoutSeconds()).cwdField("cwd", false).build();
+                .optionalInteger("timeout", 1, timeoutPolicy.maxTimeoutSeconds()).optionalBoolean("background").cwdField("cwd", false).build();
     }
 
     @Override public ToolResult run(JsonNode input, ToolContext ctx) {
+        if (input.has("background") && input.get("background").asBoolean()) {
+            return ToolResult.error("background=true is not supported yet. "
+                    + "No task was started. Future background task results will include task id, command, cwd, status, pid, startedAt, endedAt, and outputRef.");
+        }
+
         String command = input.get("command").asText();
         List<String> args = new ArrayList<>();
         if (input.has("args")) for (JsonNode a : input.get("args")) args.add(a.asText());
@@ -63,13 +68,6 @@ public final class RunCommandTool implements Tool {
             List<String> cmd = new ArrayList<>(); cmd.add(command); cmd.addAll(args);
             ProcessBuilder pb = new ProcessBuilder(cmd); pb.directory(cwd.toFile());
             Process p = pb.start();
-            String taskId = UUID.randomUUID().toString();
-            Instant started = Instant.now();
-
-            if (timeout.toSeconds() > 30) {
-                BackgroundTaskResult bg = new BackgroundTaskResult(taskId, BackgroundTaskType.COMMAND, command, cwd.toString(), Optional.of(p.pid()), BackgroundTaskStatus.RUNNING, started, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
-                return new ToolResult("Background task started: " + taskId, false, false, Optional.of(bg));
-            }
 
             boolean finished = p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
             if (!finished) { p.destroyForcibly(); p.waitFor(1, TimeUnit.SECONDS); return ToolResult.error("Command timed out after " + timeout.toSeconds() + "s: " + command); }
