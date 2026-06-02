@@ -6,6 +6,7 @@ import code4j.context.accounting.TokenAccountingService;
 import code4j.context.compact.AutoCompactController;
 import code4j.context.compact.AutoCompactPolicy;
 import code4j.context.compact.CompactService;
+import code4j.context.compact.ManualCompactResult;
 import code4j.context.manager.ContextManager;
 import code4j.context.stats.ContextStatsCalculator;
 import code4j.context.stats.ModelContextWindow;
@@ -115,6 +116,12 @@ public final class ApplicationServices {
             if (!(m instanceof SystemMessage)) result.add(m);
         }
         return List.copyOf(result);
+    }
+
+    public List<ChatMessage> sessionMessages() { return List.of(); }
+
+    public ManualCompactResult manualCompact() {
+        return ManualCompactResult.skipped(List.of(), "not implemented");
     }
 
     public ToolRegistry toolRegistry() { return toolRegistry; }
