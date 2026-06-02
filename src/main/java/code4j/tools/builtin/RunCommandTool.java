@@ -1,0 +1,91 @@
+package code4j.tools.builtin;
+
+import code4j.core.turn.CancellationPhase;
+import code4j.permissions.model.*;
+import code4j.tools.api.Tool;
+import code4j.tools.api.ToolContext;
+import code4j.tools.api.ValidationResult;
+import code4j.tools.metadata.*;
+import code4j.tools.result.BackgroundTaskResult;
+import code4j.tools.result.BackgroundTaskStatus;
+import code4j.tools.result.BackgroundTaskType;
+import code4j.tools.result.ToolResult;
+import code4j.tools.validation.ToolInputValidation;
+import code4j.workspace.*;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.*;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+
+public final class RunCommandTool implements Tool {
+    private static final JsonNodeFactory JSON = JsonNodeFactory.instance;
+    private static final ObjectNode INPUT_SCHEMA = createSchema();
+    private static final ToolMetadata METADATA = new ToolMetadata("run_command", "Execute a shell command in the workspace.", INPUT_SCHEMA, ToolOrigin.BUILTIN, Set.of(ToolCapability.COMMAND), ToolStatus.AVAILABLE);
+    private static final int MAX_OUTPUT_CHARS = 50_000;
+
+    private final WorkspacePathResolver pathResolver;
+    private final CommandClassifier classifier;
+    private final CommandTimeoutPolicy timeoutPolicy;
+
+    public RunCommandTool(WorkspacePathResolver pathResolver) { this(pathResolver, new CommandClassifier(), new CommandTimeoutPolicy()); }
+    public RunCommandTool(WorkspacePathResolver pathResolver, CommandClassifier classifier, CommandTimeoutPolicy timeoutPolicy) {
+        this.pathResolver = Objects.requireNonNull(pathResolver, "pathResolver");
+        this.classifier = Objects.requireNonNull(classifier, "classifier");
+        this.timeoutPolicy = Objects.requireNonNull(timeoutPolicy, "timeoutPolicy");
+    }
+
+    @Override public ToolMetadata metadata() { return METADATA; }
+    @Override public JsonNode inputSchema() { return INPUT_SCHEMA; }
+
+    @Override public ValidationResult validateInput(JsonNode input) {
+        return ToolInputValidation.object(input).requiredString("command").optionalStringArray("args", true)
+                .optionalInteger("timeout", 1, timeoutPolicy.maxTimeoutSeconds()).cwdField("cwd", false).build();
+    }
+
+    @Override public ToolResult run(JsonNode input, ToolContext ctx) {
+        String command = input.get("command").asText();
+        List<String> args = new ArrayList<>();
+        if (input.has("args")) for (JsonNode a : input.get("args")) args.add(a.asText());
+        Duration timeout = timeoutPolicy.timeoutFor(input.has("timeout") ? input.get("timeout").asInt() : null);
+
+        CommandClassificationResult cr = classifier.classify(command, args);
+        try {
+            Path cwd = input.has("cwd") ? pathResolver.resolve(new WorkspacePathRequest(ctx.cwd(), input.get("cwd").asText(), PathIntent.COMMAND_CWD, true, true)).resolvedPath().normalizedPath() : ctx.cwd();
+            ctx.cancellationToken().throwIfCancellationRequested(CancellationPhase.TOOL_EXECUTION);
+
+            List<String> cmd = new ArrayList<>(); cmd.add(command); cmd.addAll(args);
+            ProcessBuilder pb = new ProcessBuilder(cmd); pb.directory(cwd.toFile());
+            Process p = pb.start();
+            String taskId = UUID.randomUUID().toString();
+            Instant started = Instant.now();
+
+            if (timeout.toSeconds() > 30) {
+                BackgroundTaskResult bg = new BackgroundTaskResult(taskId, BackgroundTaskType.COMMAND, command, cwd.toString(), Optional.of(p.pid()), BackgroundTaskStatus.RUNNING, started, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
+                return new ToolResult("Background task started: " + taskId, false, false, Optional.of(bg));
+            }
+
+            boolean finished = p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            if (!finished) { p.destroyForcibly(); p.waitFor(1, TimeUnit.SECONDS); return ToolResult.error("Command timed out after " + timeout.toSeconds() + "s: " + command); }
+
+            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            String err = new String(p.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+            int exit = p.exitValue();
+            StringBuilder sb = new StringBuilder();
+            sb.append("EXIT: ").append(exit).append("\n");
+            if (!out.isEmpty()) { sb.append("STDOUT:\n"); sb.append(out.length() > MAX_OUTPUT_CHARS ? out.substring(0, MAX_OUTPUT_CHARS) + "\n... truncated" : out); sb.append("\n"); }
+            if (!err.isEmpty()) { sb.append("STDERR:\n"); sb.append(err.length() > MAX_OUTPUT_CHARS ? err.substring(0, MAX_OUTPUT_CHARS) + "\n... truncated" : err); }
+            return exit == 0 ? ToolResult.ok(sb.toString()) : ToolResult.error(sb.toString());
+        } catch (WorkspacePathException e) { return ToolResult.error(e.getMessage()); }
+        catch (IOException e) { return ToolResult.error("Command failed: " + e.getMessage()); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); return ToolResult.error("Command interrupted"); }
+    }
+
+    private static ObjectNode createSchema() { ObjectNode s = JSON.objectNode(); s.put("type", "object"); var p = s.putObject("properties"); p.putObject("command").put("type", "string"); var a = p.putObject("args"); a.put("type", "array"); a.putObject("items").put("type", "string"); p.putObject("timeout").put("type", "integer").put("minimum", 1); p.putObject("cwd").put("type", "string"); var r = s.putArray("required"); r.add("command"); return s; }
+}

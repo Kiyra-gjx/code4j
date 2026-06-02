@@ -21,6 +21,8 @@ import code4j.model.MockModelAdapter;
 import code4j.model.anthropic.AnthropicModelAdapter;
 import code4j.model.anthropic.HttpAnthropicTransport;
 import code4j.prompt.SystemPromptBuilder;
+import code4j.skills.SkillDiscovery;
+import code4j.skills.SkillRegistry;
 import code4j.tools.builtin.*;
 import code4j.tools.registry.ToolRegistry;
 import code4j.tools.result.ToolResultStorage;
@@ -93,6 +95,11 @@ public final class ApplicationServices {
         registry.register(new ListFilesTool(pathResolver));
         registry.register(new WriteFileTool(pathResolver));
         registry.register(new GrepFilesTool(pathResolver));
+        registry.register(new AskUserTool());
+        registry.register(new EditFileTool(pathResolver));
+        registry.register(new ModifyFileTool(pathResolver));
+        registry.register(new PatchFileTool(pathResolver));
+        registry.register(new RunCommandTool(pathResolver));
         return registry;
     }
 
