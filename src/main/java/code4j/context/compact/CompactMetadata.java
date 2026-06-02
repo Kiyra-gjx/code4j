@@ -17,4 +17,5 @@ public record CompactMetadata(CompactTrigger trigger, long tokensBefore, long to
     }
 
     public int compressedCount() { return messageCount; }
+    public int messagesCompressed() { return messageCount; }
 }
