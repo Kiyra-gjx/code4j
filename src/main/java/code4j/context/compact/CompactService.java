@@ -171,4 +171,16 @@ public final class CompactService {
                 %s
                 """.formatted(text);
     }
+
+    /**
+     * A projected view of messages that separates what the model sees (projected)
+     * from what is persisted (storage). The boundary marks where compaction occurred
+     * so the persistence layer can record a COMPACT_BOUNDARY event.
+     */
+    public record CollapsedView(List<ChatMessage> projected, CompressionBoundaryResult boundary) {
+        public CollapsedView {
+            projected = List.copyOf(Objects.requireNonNull(projected, "projected"));
+            boundary = Objects.requireNonNull(boundary, "boundary");
+        }
+    }
 }
