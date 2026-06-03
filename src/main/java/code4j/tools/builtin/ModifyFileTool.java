@@ -1,7 +1,9 @@
 package code4j.tools.builtin;
 
 import code4j.core.turn.CancellationPhase;
+import code4j.permissions.api.PermissionService;
 import code4j.permissions.model.PathIntent;
+import code4j.permissions.model.PermissionContext;
 import code4j.tools.api.Tool;
 import code4j.tools.api.ToolContext;
 import code4j.tools.api.ValidationResult;
@@ -26,8 +28,12 @@ public final class ModifyFileTool implements Tool {
     private static final ToolMetadata METADATA = new ToolMetadata("modify_file", "Create or replace a file with full content.", INPUT_SCHEMA, ToolOrigin.BUILTIN, Set.of(ToolCapability.WRITE), ToolStatus.AVAILABLE);
 
     private final WorkspacePathResolver pathResolver;
+    private final PermissionService permissionService;
 
-    public ModifyFileTool(WorkspacePathResolver pathResolver) { this.pathResolver = Objects.requireNonNull(pathResolver, "pathResolver"); }
+    public ModifyFileTool(WorkspacePathResolver pathResolver, PermissionService permissionService) {
+        this.pathResolver = Objects.requireNonNull(pathResolver, "pathResolver");
+        this.permissionService = Objects.requireNonNull(permissionService, "permissionService");
+    }
 
     @Override public ToolMetadata metadata() { return METADATA; }
     @Override public JsonNode inputSchema() { return INPUT_SCHEMA; }
@@ -47,6 +53,8 @@ public final class ModifyFileTool implements Tool {
             ctx.cancellationToken().throwIfCancellationRequested(CancellationPhase.TOOL_EXECUTION);
             WorkspacePathResult resolved = pathResolver.resolve(new WorkspacePathRequest(ctx.cwd(), path, PathIntent.WRITE, WorkspacePathPolicy.TARGET_OR_EXISTING_PARENT));
             Path target = resolved.resolvedPath().normalizedPath();
+            permissionService.ensurePath(target, PathIntent.WRITE,
+                    new PermissionContext(ctx.sessionId(), ctx.turnId(), ctx.toolUseId()));
             boolean existed = Files.exists(target);
             Files.createDirectories(target.getParent());
             Files.writeString(target, content, StandardCharsets.UTF_8);

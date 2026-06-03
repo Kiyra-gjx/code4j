@@ -1,7 +1,9 @@
 package code4j.tools.builtin;
 
 import code4j.core.turn.CancellationPhase;
+import code4j.permissions.api.PermissionService;
 import code4j.permissions.model.PathIntent;
+import code4j.permissions.model.PermissionContext;
 import code4j.tools.api.Tool;
 import code4j.tools.api.ToolContext;
 import code4j.tools.api.ValidationResult;
@@ -35,13 +37,11 @@ public final class WriteFileTool implements Tool {
             INPUT_SCHEMA, ToolOrigin.BUILTIN, Set.of(ToolCapability.WRITE), ToolStatus.AVAILABLE);
 
     private final WorkspacePathResolver workspacePathResolver;
+    private final PermissionService permissionService;
 
-    public WriteFileTool() {
-        this(new WorkspacePathResolver());
-    }
-
-    public WriteFileTool(WorkspacePathResolver workspacePathResolver) {
+    public WriteFileTool(WorkspacePathResolver workspacePathResolver, PermissionService permissionService) {
         this.workspacePathResolver = Objects.requireNonNull(workspacePathResolver, "workspacePathResolver");
+        this.permissionService = Objects.requireNonNull(permissionService, "permissionService");
     }
 
     @Override public ToolMetadata metadata() { return METADATA; }
@@ -72,6 +72,8 @@ public final class WriteFileTool implements Tool {
                     new WorkspacePathRequest(toolContext.cwd(), inputPath, PathIntent.WRITE,
                             WorkspacePathPolicy.TARGET_OR_EXISTING_PARENT));
             Path targetPath = resolved.resolvedPath().normalizedPath();
+            permissionService.ensurePath(targetPath, PathIntent.WRITE,
+                    new PermissionContext(toolContext.sessionId(), toolContext.turnId(), toolContext.toolUseId()));
             boolean existed = Files.exists(targetPath);
 
             Files.createDirectories(targetPath.getParent());

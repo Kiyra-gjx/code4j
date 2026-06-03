@@ -1,7 +1,10 @@
 package code4j.tools.builtin;
 
 import code4j.core.turn.CancellationPhase;
+import code4j.permissions.api.PermissionService;
 import code4j.permissions.model.PathIntent;
+import code4j.permissions.model.PermissionContext;
+import code4j.permissions.model.PermissionResource;
 import code4j.tools.api.Tool;
 import code4j.tools.api.ToolContext;
 import code4j.tools.api.ValidationResult;
@@ -26,8 +29,12 @@ public final class PatchFileTool implements Tool {
     private static final ToolMetadata METADATA = new ToolMetadata("patch_file", "Apply multiple text replacements to a file.", INPUT_SCHEMA, ToolOrigin.BUILTIN, Set.of(ToolCapability.WRITE), ToolStatus.AVAILABLE);
 
     private final WorkspacePathResolver pathResolver;
+    private final PermissionService permissionService;
 
-    public PatchFileTool(WorkspacePathResolver pathResolver) { this.pathResolver = Objects.requireNonNull(pathResolver, "pathResolver"); }
+    public PatchFileTool(WorkspacePathResolver pathResolver, PermissionService permissionService) {
+        this.pathResolver = Objects.requireNonNull(pathResolver, "pathResolver");
+        this.permissionService = Objects.requireNonNull(permissionService, "permissionService");
+    }
 
     @Override public ToolMetadata metadata() { return METADATA; }
     @Override public JsonNode inputSchema() { return INPUT_SCHEMA; }
@@ -54,14 +61,21 @@ public final class PatchFileTool implements Tool {
             WorkspacePathResult resolved = pathResolver.resolve(new WorkspacePathRequest(ctx.cwd(), path, PathIntent.WRITE, WorkspacePathPolicy.EXISTING_FILE));
             Path target = resolved.resolvedPath().normalizedPath();
             String content = Files.readString(target, StandardCharsets.UTF_8);
+            var replacements = input.get("replacements");
+            StringBuilder diffPreview = new StringBuilder();
             int count = 0;
-            for (JsonNode r : input.get("replacements")) {
+            for (JsonNode r : replacements) {
                 String ot = r.get("oldText").asText(), nt = r.get("newText").asText();
                 int idx = content.indexOf(ot);
                 if (idx < 0) return ToolResult.error("oldText not found: " + ot.substring(0, Math.min(80, ot.length())));
                 content = content.substring(0, idx) + nt + content.substring(idx + ot.length());
+                if (diffPreview.length() < 500) {
+                    diffPreview.append("- ").append(ot.length() > 100 ? ot.substring(0, 100) + "..." : ot).append("\n+ ").append(nt.length() > 100 ? nt.substring(0, 100) + "..." : nt).append("\n");
+                }
                 count++;
             }
+            permissionService.ensureEdit(new PermissionResource.EditResource(target, "patch_file: " + path + " (" + count + " replacements)", diffPreview.toString()),
+                    new PermissionContext(ctx.sessionId(), ctx.turnId(), ctx.toolUseId()));
             ctx.cancellationToken().throwIfCancellationRequested(CancellationPhase.TOOL_EXECUTION);
             Files.writeString(target, content, StandardCharsets.UTF_8);
             return ToolResult.ok("PATCHED: " + target + "\nREPLACEMENTS: " + count);

@@ -1,6 +1,7 @@
 package code4j.tools.builtin;
 
 import code4j.core.turn.CancellationPhase;
+import code4j.permissions.api.PermissionService;
 import code4j.permissions.model.*;
 import code4j.tools.api.Tool;
 import code4j.tools.api.ToolContext;
@@ -33,12 +34,27 @@ public final class RunCommandTool implements Tool {
     private final WorkspacePathResolver pathResolver;
     private final CommandClassifier classifier;
     private final CommandTimeoutPolicy timeoutPolicy;
+    private final PermissionService permissionService;
+    private final BackgroundTaskManager backgroundTaskManager;
 
-    public RunCommandTool(WorkspacePathResolver pathResolver) { this(pathResolver, new CommandClassifier(), new CommandTimeoutPolicy()); }
-    public RunCommandTool(WorkspacePathResolver pathResolver, CommandClassifier classifier, CommandTimeoutPolicy timeoutPolicy) {
+    public RunCommandTool(WorkspacePathResolver pathResolver, PermissionService permissionService) {
+        this(pathResolver, new CommandClassifier(), new CommandTimeoutPolicy(), permissionService, null);
+    }
+
+    public RunCommandTool(WorkspacePathResolver pathResolver, CommandClassifier classifier, CommandTimeoutPolicy timeoutPolicy, PermissionService permissionService) {
+        this(pathResolver, classifier, timeoutPolicy, permissionService, null);
+    }
+
+    public RunCommandTool(WorkspacePathResolver pathResolver, PermissionService permissionService, BackgroundTaskManager backgroundTaskManager) {
+        this(pathResolver, new CommandClassifier(), new CommandTimeoutPolicy(), permissionService, backgroundTaskManager);
+    }
+
+    RunCommandTool(WorkspacePathResolver pathResolver, CommandClassifier classifier, CommandTimeoutPolicy timeoutPolicy, PermissionService permissionService, BackgroundTaskManager backgroundTaskManager) {
         this.pathResolver = Objects.requireNonNull(pathResolver, "pathResolver");
         this.classifier = Objects.requireNonNull(classifier, "classifier");
         this.timeoutPolicy = Objects.requireNonNull(timeoutPolicy, "timeoutPolicy");
+        this.permissionService = Objects.requireNonNull(permissionService, "permissionService");
+        this.backgroundTaskManager = backgroundTaskManager;
     }
 
     @Override public ToolMetadata metadata() { return METADATA; }
@@ -51,8 +67,25 @@ public final class RunCommandTool implements Tool {
 
     @Override public ToolResult run(JsonNode input, ToolContext ctx) {
         if (input.has("background") && input.get("background").asBoolean()) {
-            return ToolResult.error("background=true is not supported yet. "
-                    + "No task was started. Future background task results will include task id, command, cwd, status, pid, startedAt, endedAt, and outputRef.");
+            if (backgroundTaskManager == null) {
+                return ToolResult.error("Background tasks not available. No BackgroundTaskManager configured.");
+            }
+            String command = input.get("command").asText();
+            List<String> args2 = new ArrayList<>();
+            if (input.has("args")) for (JsonNode a : input.get("args")) args2.add(a.asText());
+            Path cwd2;
+            try {
+                cwd2 = input.has("cwd") ? pathResolver.resolve(new WorkspacePathRequest(ctx.cwd(), input.get("cwd").asText(), PathIntent.COMMAND_CWD, true, true)).resolvedPath().normalizedPath() : ctx.cwd();
+            } catch (WorkspacePathException e) { return ToolResult.error(e.getMessage()); }
+            CommandClassificationResult cr2 = classifier.classify(command, args2);
+            permissionService.ensureCommand(
+                    new CommandSignature(command, args2), cr2.classification(),
+                    new PermissionContext(ctx.sessionId(), ctx.turnId(), ctx.toolUseId()));
+            Duration timeout2 = timeoutPolicy.timeoutFor(input.has("timeout") ? input.get("timeout").asInt() : null);
+            BackgroundTaskResult btr = backgroundTaskManager.submit(command, args2, cwd2, timeout2);
+            return ToolResult.ok("BACKGROUND TASK STARTED\nTASK_ID: " + btr.taskId()
+                    + "\nCOMMAND: " + command + "\nCWD: " + cwd2 + "\nSTATUS: " + btr.status()
+                    + "\n\nUse check_background_task with action=status and taskId=" + btr.taskId() + " to check progress.");
         }
 
         String command = input.get("command").asText();
@@ -61,6 +94,10 @@ public final class RunCommandTool implements Tool {
         Duration timeout = timeoutPolicy.timeoutFor(input.has("timeout") ? input.get("timeout").asInt() : null);
 
         CommandClassificationResult cr = classifier.classify(command, args);
+        permissionService.ensureCommand(
+                new CommandSignature(command, args), cr.classification(),
+                new PermissionContext(ctx.sessionId(), ctx.turnId(), ctx.toolUseId()));
+
         try {
             Path cwd = input.has("cwd") ? pathResolver.resolve(new WorkspacePathRequest(ctx.cwd(), input.get("cwd").asText(), PathIntent.COMMAND_CWD, true, true)).resolvedPath().normalizedPath() : ctx.cwd();
             ctx.cancellationToken().throwIfCancellationRequested(CancellationPhase.TOOL_EXECUTION);

@@ -1,7 +1,10 @@
 package code4j.tools.builtin;
 
 import code4j.core.turn.CancellationPhase;
+import code4j.permissions.api.PermissionService;
 import code4j.permissions.model.PathIntent;
+import code4j.permissions.model.PermissionContext;
+import code4j.permissions.model.PermissionResource;
 import code4j.tools.api.Tool;
 import code4j.tools.api.ToolContext;
 import code4j.tools.api.ValidationResult;
@@ -26,8 +29,12 @@ public final class EditFileTool implements Tool {
     private static final ToolMetadata METADATA = new ToolMetadata("edit_file", "Edit a file by exact text replacement.", INPUT_SCHEMA, ToolOrigin.BUILTIN, Set.of(ToolCapability.WRITE), ToolStatus.AVAILABLE);
 
     private final WorkspacePathResolver pathResolver;
+    private final PermissionService permissionService;
 
-    public EditFileTool(WorkspacePathResolver pathResolver) { this.pathResolver = Objects.requireNonNull(pathResolver, "pathResolver"); }
+    public EditFileTool(WorkspacePathResolver pathResolver, PermissionService permissionService) {
+        this.pathResolver = Objects.requireNonNull(pathResolver, "pathResolver");
+        this.permissionService = Objects.requireNonNull(permissionService, "permissionService");
+    }
 
     @Override public ToolMetadata metadata() { return METADATA; }
     @Override public JsonNode inputSchema() { return INPUT_SCHEMA; }
@@ -57,10 +64,19 @@ public final class EditFileTool implements Tool {
             int first = original.indexOf(oldText);
             if (first < 0) return ToolResult.error("oldText not found in " + path);
             String next = replaceAll ? original.replace(oldText, newText) : original.substring(0, first) + newText + original.substring(first + oldText.length());
+            String diffPreview = buildDiffPreview(oldText, newText);
+            permissionService.ensureEdit(new PermissionResource.EditResource(target, "edit_file: " + path, diffPreview),
+                    new PermissionContext(ctx.sessionId(), ctx.turnId(), ctx.toolUseId()));
             ctx.cancellationToken().throwIfCancellationRequested(CancellationPhase.TOOL_EXECUTION);
             Files.writeString(target, next, StandardCharsets.UTF_8);
             return ToolResult.ok("EDITED: " + target);
         } catch (WorkspacePathException | IOException e) { return ToolResult.error(e.getMessage()); }
+    }
+
+    private static String buildDiffPreview(String oldText, String newText) {
+        String oldPreview = oldText.length() > 200 ? oldText.substring(0, 200) + "..." : oldText;
+        String newPreview = newText.length() > 200 ? newText.substring(0, 200) + "..." : newText;
+        return "- " + oldPreview.replace("\n", "\\n") + "\n+ " + newPreview.replace("\n", "\\n");
     }
 
     private static ObjectNode createSchema() { ObjectNode s = JSON.objectNode(); s.put("type", "object"); var p = s.putObject("properties"); p.putObject("path").put("type", "string"); p.putObject("oldText").put("type", "string"); p.putObject("newText").put("type", "string"); p.putObject("replaceAll").put("type", "boolean"); var r = s.putArray("required"); r.add("path"); r.add("oldText"); r.add("newText"); return s; }
