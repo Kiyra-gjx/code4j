@@ -46,6 +46,7 @@ public final class AgentLoop {
     private final ContextManager contextManager;
     private final ContextStatsCalculator contextStatsCalculator;
     private final AutoCompactController autoCompactController;
+    private final SnipCompactService snipCompactService;
     private final int maxEmptyResponseRetries;
 
     public AgentLoop(ModelAdapter modelAdapter, AgentEventSink eventSink) {
@@ -71,12 +72,21 @@ public final class AgentLoop {
     public AgentLoop(ModelAdapter modelAdapter, AgentEventSink eventSink, ToolExecutor toolExecutor,
                      ContextManager contextManager, ContextStatsCalculator contextStatsCalculator,
                      AutoCompactController autoCompactController, int maxEmptyResponseRetries) {
+        this(modelAdapter, eventSink, toolExecutor, contextManager, contextStatsCalculator,
+                autoCompactController, new SnipCompactService(), maxEmptyResponseRetries);
+    }
+
+    public AgentLoop(ModelAdapter modelAdapter, AgentEventSink eventSink, ToolExecutor toolExecutor,
+                     ContextManager contextManager, ContextStatsCalculator contextStatsCalculator,
+                     AutoCompactController autoCompactController, SnipCompactService snipCompactService,
+                     int maxEmptyResponseRetries) {
         this.modelAdapter = Objects.requireNonNull(modelAdapter, "modelAdapter");
         this.eventSink = Objects.requireNonNull(eventSink, "eventSink");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor");
         this.contextManager = Objects.requireNonNull(contextManager, "contextManager");
         this.contextStatsCalculator = Objects.requireNonNull(contextStatsCalculator, "contextStatsCalculator");
         this.autoCompactController = Objects.requireNonNull(autoCompactController, "autoCompactController");
+        this.snipCompactService = Objects.requireNonNull(snipCompactService, "snipCompactService");
         if (maxEmptyResponseRetries < 0) throw new IllegalArgumentException("maxEmptyResponseRetries must be non-negative");
         this.maxEmptyResponseRetries = maxEmptyResponseRetries;
     }
@@ -95,6 +105,13 @@ public final class AgentLoop {
                 ContextStats preCompactStats = contextStatsCalculator.calculate(List.copyOf(messages));
                 messages = new ArrayList<>(contextManager.microcompact(List.copyOf(messages), preCompactStats));
                 ContextStats stats = contextStatsCalculator.calculate(List.copyOf(messages));
+                if (snipCompactService.shouldCompact(stats)) {
+                    var scResult = snipCompactService.compact(List.copyOf(messages));
+                    if (scResult.compacted()) {
+                        messages = new ArrayList<>(scResult.messages());
+                        stats = contextStatsCalculator.calculate(List.copyOf(messages));
+                    }
+                }
                 AutoCompactResult acr = autoCompactPreflight(request.turnId(), messages, actions, stats);
                 if (acr.status() == CompactStatus.COMPACTED) {
                     messages = new ArrayList<>(acr.messages());
