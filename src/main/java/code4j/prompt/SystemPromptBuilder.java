@@ -1,5 +1,6 @@
 package code4j.prompt;
 
+import code4j.skills.SkillSummary;
 import code4j.tools.api.Tool;
 import code4j.tools.registry.ToolRegistry;
 
@@ -16,11 +17,12 @@ import java.util.StringJoiner;
  */
 public final class SystemPromptBuilder {
 
-    public record Input(Path home, Path cwd, ToolRegistry tools) {
+    public record Input(Path home, Path cwd, ToolRegistry tools, List<SkillSummary> skills) {
         public Input {
             home = Objects.requireNonNull(home, "home").toAbsolutePath().normalize();
             cwd = Objects.requireNonNull(cwd, "cwd").toAbsolutePath().normalize();
             tools = Objects.requireNonNull(tools, "tools");
+            skills = List.copyOf(Objects.requireNonNull(skills, "skills"));
         }
     }
 
@@ -39,6 +41,9 @@ public final class SystemPromptBuilder {
                 Keep dependent actions sequential when later calls need earlier results.
                 """);
         prompt.add(toolSection(input.tools()));
+        if (!input.skills().isEmpty()) {
+            prompt.add(skillSection(input.skills()));
+        }
         prompt.add("""
                 Structured response protocol:
                 - Use <final>...</final> only when the task is complete and control returns to the user.
@@ -53,6 +58,15 @@ public final class SystemPromptBuilder {
         maybeRead(input.home().resolve("AGENTS.md"), "Global instructions", prompt);
         maybeRead(input.cwd().resolve("AGENTS.md"), "Project instructions", prompt);
         return prompt.toString();
+    }
+
+    private String skillSection(List<SkillSummary> skills) {
+        StringBuilder sb = new StringBuilder("Available skills (use load_skill to load full content):");
+        for (SkillSummary s : skills) {
+            sb.append("\n- ").append(s.name()).append(": ").append(s.description())
+                    .append(" (source: ").append(s.source().label()).append(")");
+        }
+        return sb.toString();
     }
 
     private String toolSection(ToolRegistry registry) {
