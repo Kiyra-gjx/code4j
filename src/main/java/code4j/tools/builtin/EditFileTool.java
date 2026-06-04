@@ -1,6 +1,7 @@
 package code4j.tools.builtin;
 
 import code4j.core.turn.CancellationPhase;
+import code4j.edit.EditReviewFactory;
 import code4j.permissions.api.PermissionService;
 import code4j.permissions.model.PathIntent;
 import code4j.permissions.model.PermissionContext;
@@ -21,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 public final class EditFileTool implements Tool {
@@ -64,19 +66,14 @@ public final class EditFileTool implements Tool {
             int first = original.indexOf(oldText);
             if (first < 0) return ToolResult.error("oldText not found in " + path);
             String next = replaceAll ? original.replace(oldText, newText) : original.substring(0, first) + newText + original.substring(first + oldText.length());
-            String diffPreview = buildDiffPreview(oldText, newText);
-            permissionService.ensureEdit(new PermissionResource.EditResource(target, "edit_file: " + path, diffPreview),
+            PermissionResource.EditResource editResource = EditReviewFactory.edit(
+                    target, "edit_file: " + path, Optional.of(original), next, ctx.toolUseId());
+            permissionService.ensureEdit(editResource,
                     new PermissionContext(ctx.sessionId(), ctx.turnId(), ctx.toolUseId()));
             ctx.cancellationToken().throwIfCancellationRequested(CancellationPhase.TOOL_EXECUTION);
             Files.writeString(target, next, StandardCharsets.UTF_8);
             return ToolResult.ok("EDITED: " + target);
         } catch (WorkspacePathException | IOException e) { return ToolResult.error(e.getMessage()); }
-    }
-
-    private static String buildDiffPreview(String oldText, String newText) {
-        String oldPreview = oldText.length() > 200 ? oldText.substring(0, 200) + "..." : oldText;
-        String newPreview = newText.length() > 200 ? newText.substring(0, 200) + "..." : newText;
-        return "- " + oldPreview.replace("\n", "\\n") + "\n+ " + newPreview.replace("\n", "\\n");
     }
 
     private static ObjectNode createSchema() { ObjectNode s = JSON.objectNode(); s.put("type", "object"); var p = s.putObject("properties"); p.putObject("path").put("type", "string"); p.putObject("oldText").put("type", "string"); p.putObject("newText").put("type", "string"); p.putObject("replaceAll").put("type", "boolean"); var r = s.putArray("required"); r.add("path"); r.add("oldText"); r.add("newText"); return s; }

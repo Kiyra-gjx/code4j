@@ -1,5 +1,7 @@
 package code4j.permissions.model;
 
+import code4j.edit.EditReview;
+
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Optional;
@@ -23,12 +25,30 @@ public sealed interface PermissionResource
         }
     }
 
-    record EditResource(Path path, String summary, String diffPreview) implements PermissionResource {
+    enum EditOperation {
+        CREATE,
+        OVERWRITE,
+        EDIT,
+        PATCH,
+        MODIFY
+    }
+
+    record EditResource(EditReview review, Optional<String> toolUseId) implements PermissionResource {
         public EditResource {
-            path = Objects.requireNonNull(path, "path");
-            summary = Objects.requireNonNull(summary, "summary");
-            diffPreview = Objects.requireNonNull(diffPreview, "diffPreview");
+            review = Objects.requireNonNull(review, "review");
+            toolUseId = Objects.requireNonNull(toolUseId, "toolUseId");
         }
+
+        public Path path() { return review.path(); }
+        public EditOperation operation() { return review.operation(); }
+        public String summary() { return review.summary(); }
+        public String diffPreview() { return review.diffPreview(); }
+        public long beforeChars() { return review.beforeChars(); }
+        public long afterChars() { return review.afterChars(); }
+        public boolean truncated() { return review.truncated(); }
+        public boolean originalExists() { return review.beforeExists(); }
+        public String reviewFingerprint() { return review.reviewFingerprint(); }
+        public Optional<String> diffRef() { return review.diffRef(); }
     }
 
     record McpToolResource(String serverName, String toolName, String wrappedName, String description)

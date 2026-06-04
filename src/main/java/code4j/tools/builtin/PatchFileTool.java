@@ -1,6 +1,7 @@
 package code4j.tools.builtin;
 
 import code4j.core.turn.CancellationPhase;
+import code4j.edit.EditReviewFactory;
 import code4j.permissions.api.PermissionService;
 import code4j.permissions.model.PathIntent;
 import code4j.permissions.model.PermissionContext;
@@ -21,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 public final class PatchFileTool implements Tool {
@@ -60,21 +62,21 @@ public final class PatchFileTool implements Tool {
             ctx.cancellationToken().throwIfCancellationRequested(CancellationPhase.TOOL_EXECUTION);
             WorkspacePathResult resolved = pathResolver.resolve(new WorkspacePathRequest(ctx.cwd(), path, PathIntent.WRITE, WorkspacePathPolicy.EXISTING_FILE));
             Path target = resolved.resolvedPath().normalizedPath();
-            String content = Files.readString(target, StandardCharsets.UTF_8);
+            String original = Files.readString(target, StandardCharsets.UTF_8);
+            String content = original;
             var replacements = input.get("replacements");
-            StringBuilder diffPreview = new StringBuilder();
             int count = 0;
             for (JsonNode r : replacements) {
                 String ot = r.get("oldText").asText(), nt = r.get("newText").asText();
                 int idx = content.indexOf(ot);
                 if (idx < 0) return ToolResult.error("oldText not found: " + ot.substring(0, Math.min(80, ot.length())));
                 content = content.substring(0, idx) + nt + content.substring(idx + ot.length());
-                if (diffPreview.length() < 500) {
-                    diffPreview.append("- ").append(ot.length() > 100 ? ot.substring(0, 100) + "..." : ot).append("\n+ ").append(nt.length() > 100 ? nt.substring(0, 100) + "..." : nt).append("\n");
-                }
                 count++;
             }
-            permissionService.ensureEdit(new PermissionResource.EditResource(target, "patch_file: " + path + " (" + count + " replacements)", diffPreview.toString()),
+            PermissionResource.EditResource editResource = EditReviewFactory.patch(
+                    target, "patch_file: " + path + " (" + count + " replacements)",
+                    Optional.of(original), content, ctx.toolUseId());
+            permissionService.ensureEdit(editResource,
                     new PermissionContext(ctx.sessionId(), ctx.turnId(), ctx.toolUseId()));
             ctx.cancellationToken().throwIfCancellationRequested(CancellationPhase.TOOL_EXECUTION);
             Files.writeString(target, content, StandardCharsets.UTF_8);

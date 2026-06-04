@@ -1,5 +1,7 @@
 package code4j.edit;
 
+import code4j.permissions.model.PermissionResource.EditOperation;
+
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -12,33 +14,41 @@ import java.util.Optional;
 public final class UnifiedDiffBuilder {
     private static final int DEFAULT_MAX_PREVIEW_CHARS = 4096;
     private static final int CONTEXT_LINES = 3;
+    private static final int LCS_CUTOFF = 4_000_000;
     private static final String TRUNCATED_MARKER = "[diff preview truncated]";
 
     private UnifiedDiffBuilder() {}
 
-    public static EditReview build(Path path, String operation, String summary,
+    public static EditReview build(Path path, EditOperation operation, String summary,
                                    Optional<String> beforeContent, String afterContent) {
-        Path p = Objects.requireNonNull(path, "path");
+        return build(path, operation, summary, beforeContent, afterContent, DEFAULT_MAX_PREVIEW_CHARS);
+    }
+
+    public static EditReview build(Path path, EditOperation operation, String summary,
+                                   Optional<String> beforeContent, String afterContent,
+                                   int maxPreviewChars) {
+        Path actualPath = Objects.requireNonNull(path, "path");
+        Objects.requireNonNull(operation, "operation");
         Optional<String> nb = Objects.requireNonNull(beforeContent, "beforeContent").map(UnifiedDiffBuilder::norm);
         String na = norm(Objects.requireNonNull(afterContent, "afterContent"));
         boolean exists = nb.isPresent();
-        String preview = renderPreview(p, nb, na);
-        boolean truncated = preview.length() > DEFAULT_MAX_PREVIEW_CHARS;
-        if (truncated) preview = preview.substring(0, DEFAULT_MAX_PREVIEW_CHARS - TRUNCATED_MARKER.length()) + "\n" + TRUNCATED_MARKER;
+        String preview = renderPreview(actualPath, nb, na);
+        boolean truncated = preview.length() > maxPreviewChars;
+        if (truncated) preview = truncate(preview, maxPreviewChars);
         long bc = nb.map(String::length).orElse(0);
         long ac = na.length();
-        String fp = fingerprint(p, operation, exists, nb, na);
-        return new EditReview(p, operation, summary, preview, bc, ac, exists, truncated, fp, Optional.of("sha256:" + fp));
+        String fp = fingerprint(actualPath, operation, exists, nb, na);
+        return new EditReview(actualPath, operation, summary, preview, bc, ac, exists, truncated, fp, Optional.of("sha256:" + fp));
     }
 
     private static String renderPreview(Path path, Optional<String> before, String after) {
-        String pt = path.normalize().toString().replace('\\', '/');
+        String pt = displayPath(path);
         String nb = before.orElse("");
         if (before.isPresent() && nb.equals(after)) return "--- a/" + pt + "\n+++ b/" + pt + "\n@@ no changes @@\n";
         List<String> bl = toLines(nb), al = toLines(after);
         if (!before.isPresent()) return renderCreate(pt, al);
         if (after.isEmpty()) return renderDelete(pt, bl);
-        return renderHunks(pt, bl, al);
+        return renderMultiHunk(pt, bl, al);
     }
 
     private static String renderCreate(String pt, List<String> al) {
@@ -57,7 +67,7 @@ public final class UnifiedDiffBuilder {
         return sb.toString();
     }
 
-    private static String renderHunks(String pt, List<String> bl, List<String> al) {
+    private static String renderMultiHunk(String pt, List<String> bl, List<String> al) {
         List<DiffEntry> entries = buildEntries(bl, al);
         if (entries.stream().allMatch(e -> e.type == DiffType.KEEP)) {
             return "--- a/" + pt + "\n+++ b/" + pt + "\n@@ no changes @@\n";
@@ -66,11 +76,11 @@ public final class UnifiedDiffBuilder {
         StringBuilder sb = new StringBuilder();
         sb.append("--- a/").append(pt).append("\n+++ b/").append(pt).append('\n');
         for (Range r : ranges) {
-            List<DiffEntry> slice = entries.subList(r.start, r.end + 1);
-            long os = slice.stream().filter(DiffEntry::contributesOld).findFirst().map(e -> e.oi + 1L).orElse(0L);
-            long ns = slice.stream().filter(DiffEntry::contributesNew).findFirst().map(e -> e.ni + 1L).orElse(0L);
-            long oc = slice.stream().filter(DiffEntry::contributesOld).count();
-            long nc = slice.stream().filter(DiffEntry::contributesNew).count();
+            List<DiffEntry> slice = entries.subList(r.start, r.endInclusive + 1);
+            long os = slice.stream().filter(DiffEntry::contributesToOld).findFirst().map(e -> e.oldIndex + 1L).orElse(0L);
+            long ns = slice.stream().filter(DiffEntry::contributesToNew).findFirst().map(e -> e.newIndex + 1L).orElse(0L);
+            long oc = slice.stream().filter(DiffEntry::contributesToOld).count();
+            long nc = slice.stream().filter(DiffEntry::contributesToNew).count();
             sb.append(String.format("@@ -%d,%d +%d,%d @@\n", os, oc, ns, nc));
             for (DiffEntry e : slice) sb.append(e.prefix()).append(e.text).append('\n');
         }
@@ -78,11 +88,10 @@ public final class UnifiedDiffBuilder {
     }
 
     private static List<DiffEntry> buildEntries(List<String> bl, List<String> al) {
-        int[][] lcs = new int[bl.size() + 1][al.size() + 1];
-        for (int i = bl.size() - 1; i >= 0; i--)
-            for (int j = al.size() - 1; j >= 0; j--)
-                if (bl.get(i).equals(al.get(j))) lcs[i][j] = lcs[i + 1][j + 1] + 1;
-                else lcs[i][j] = Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+        if ((long) bl.size() * (long) al.size() > LCS_CUTOFF) {
+            return buildGreedyEntries(bl, al);
+        }
+        int[][] lcs = buildLcsTable(bl, al);
         List<DiffEntry> entries = new ArrayList<>();
         int i = 0, j = 0;
         while (i < bl.size() || j < al.size()) {
@@ -93,6 +102,38 @@ public final class UnifiedDiffBuilder {
             } else {
                 entries.add(new DiffEntry(DiffType.DELETE, bl.get(i), i, j)); i++;
             }
+        }
+        return entries;
+    }
+
+    private static int[][] buildLcsTable(List<String> bl, List<String> al) {
+        int[][] lcs = new int[bl.size() + 1][al.size() + 1];
+        for (int i = bl.size() - 1; i >= 0; i--)
+            for (int j = al.size() - 1; j >= 0; j--)
+                if (bl.get(i).equals(al.get(j))) lcs[i][j] = lcs[i + 1][j + 1] + 1;
+                else lcs[i][j] = Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+        return lcs;
+    }
+
+    private static List<DiffEntry> buildGreedyEntries(List<String> bl, List<String> al) {
+        List<DiffEntry> entries = new ArrayList<>(bl.size() + al.size());
+        int i = 0, j = 0;
+        while (i < bl.size() && j < al.size()) {
+            if (bl.get(i).equals(al.get(j))) {
+                entries.add(new DiffEntry(DiffType.KEEP, bl.get(i), i, j));
+                i++; j++;
+            } else {
+                entries.add(new DiffEntry(DiffType.DELETE, bl.get(i), i, j));
+                i++;
+            }
+        }
+        while (i < bl.size()) {
+            entries.add(new DiffEntry(DiffType.DELETE, bl.get(i), i, j));
+            i++;
+        }
+        while (j < al.size()) {
+            entries.add(new DiffEntry(DiffType.INSERT, al.get(j), i, j));
+            j++;
         }
         return entries;
     }
@@ -122,7 +163,7 @@ public final class UnifiedDiffBuilder {
         Range cur = rs.getFirst();
         for (int i = 1; i < rs.size(); i++) {
             Range next = rs.get(i);
-            if (next.start <= cur.end + 1) cur = new Range(cur.start, Math.max(cur.end, next.end));
+            if (next.start <= cur.endInclusive + 1) cur = new Range(cur.start, Math.max(cur.endInclusive, next.endInclusive));
             else { merged.add(cur); cur = next; }
         }
         merged.add(cur);
@@ -133,26 +174,49 @@ public final class UnifiedDiffBuilder {
 
     private static String norm(String t) { return t.replace("\r\n", "\n").replace('\r', '\n'); }
 
-    private static String fingerprint(Path p, String op, boolean exists, Optional<String> before, String after) {
+    private static String displayPath(Path p) { return p.normalize().toString().replace('\\', '/'); }
+
+    private static String truncate(String preview, int maxPreviewChars) {
+        if (preview.length() <= maxPreviewChars) {
+            return preview;
+        }
+        String marker = "\n" + TRUNCATED_MARKER;
+        if (maxPreviewChars <= marker.length()) {
+            return marker.substring(0, maxPreviewChars);
+        }
+        return preview.substring(0, maxPreviewChars - marker.length()) + marker;
+    }
+
+    private static String toHex(byte[] hash) {
+        StringBuilder sb = new StringBuilder(hash.length * 2);
+        for (byte b : hash) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+            sb.append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
+    }
+
+    private static String fingerprint(Path p, EditOperation op, boolean exists, Optional<String> before, String after) {
         try {
             MessageDigest d = MessageDigest.getInstance("SHA-256");
-            d.update(p.normalize().toString().replace('\\', '/').getBytes(StandardCharsets.UTF_8));
-            d.update((byte) 0); d.update(op.getBytes(StandardCharsets.UTF_8));
-            d.update((byte) 0); d.update((byte) (exists ? 1 : 0));
-            d.update((byte) 0); d.update(before.orElse("").getBytes(StandardCharsets.UTF_8));
-            d.update((byte) 0); d.update(after.getBytes(StandardCharsets.UTF_8));
-            byte[] hash = d.digest();
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hash) sb.append(String.format("%02x", b & 0xFF));
-            return sb.toString();
+            d.update(displayPath(p).getBytes(StandardCharsets.UTF_8));
+            d.update((byte) 0);
+            d.update(op.name().getBytes(StandardCharsets.UTF_8));
+            d.update((byte) 0);
+            d.update((byte) (exists ? 1 : 0));
+            d.update((byte) 0);
+            d.update(before.orElse("").getBytes(StandardCharsets.UTF_8));
+            d.update((byte) 0);
+            d.update(after.getBytes(StandardCharsets.UTF_8));
+            return toHex(d.digest());
         } catch (NoSuchAlgorithmException e) { throw new IllegalStateException("SHA-256 unavailable", e); }
     }
 
     private enum DiffType { KEEP, DELETE, INSERT }
-    private record DiffEntry(DiffType type, String text, int oi, int ni) {
-        boolean contributesOld() { return type == DiffType.KEEP || type == DiffType.DELETE; }
-        boolean contributesNew() { return type == DiffType.KEEP || type == DiffType.INSERT; }
+    private record DiffEntry(DiffType type, String text, int oldIndex, int newIndex) {
+        boolean contributesToOld() { return type == DiffType.KEEP || type == DiffType.DELETE; }
+        boolean contributesToNew() { return type == DiffType.KEEP || type == DiffType.INSERT; }
         char prefix() { return switch(type) { case KEEP -> ' '; case DELETE -> '-'; case INSERT -> '+'; }; }
     }
-    private record Range(int start, int end) {}
+    private record Range(int start, int endInclusive) {}
 }
